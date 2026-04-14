@@ -1,25 +1,102 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 import path from "path";
-import { saveUploadedFile, getAudioFilePath, getAudioDuration } from "@/lib/storage";
+import fs from "fs";
+import Busboy from "busboy";
+import { Readable } from "stream";
+import { ensureUploadDirs, getAudioFilePath, getAudioDuration } from "@/lib/storage";
 import { saveEpisode } from "@/lib/db";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
+
+// Disable Next.js body parsing — we handle it ourselves via busboy (streaming)
+export const dynamic = "force-dynamic";
+
+interface ParsedUpload {
+  fields: Record<string, string>;
+  audioFile?: { filename: string; path: string; size: number; mimetype: string };
+  coverFile?: { filename: string; path: string; size: number };
+}
+
+function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
+  return new Promise((resolve, reject) => {
+    const contentType = req.headers.get("content-type") || "";
+    if (!contentType.includes("multipart/form-data")) {
+      return reject(new Error("Expected multipart/form-data"));
+    }
+
+    ensureUploadDirs();
+
+    const fields: Record<string, string> = {};
+    let audioFile: ParsedUpload["audioFile"];
+    let coverFile: ParsedUpload["coverFile"];
+    const id = uuidv4();
+
+    const bb = Busboy({
+      headers: { "content-type": contentType },
+      limits: { fileSize: 600 * 1024 * 1024 }, // 600MB max
+    });
+
+    bb.on("field", (name, value) => {
+      fields[name] = value;
+    });
+
+    bb.on("file", (fieldname, fileStream, info) => {
+      const { filename, mimeType } = info;
+      const ext = path.extname(filename) || (mimeType.includes("mpeg") ? ".mp3" : ".mp3");
+
+      if (fieldname === "audio") {
+        const destFilename = `${id}${ext}`;
+        const destPath = path.join(process.cwd(), "uploads", destFilename);
+        const writeStream = fs.createWriteStream(destPath);
+        let size = 0;
+
+        fileStream.on("data", (chunk: Buffer) => { size += chunk.length; });
+        fileStream.pipe(writeStream);
+        writeStream.on("finish", () => {
+          audioFile = { filename: destFilename, path: destPath, size, mimetype: mimeType };
+        });
+        writeStream.on("error", reject);
+      } else if (fieldname === "cover") {
+        const coverExt = path.extname(filename) || ".jpg";
+        const coverFilename = `${id}-cover${coverExt}`;
+        const coverPath = path.join(process.cwd(), "uploads", "covers", coverFilename);
+        const writeStream = fs.createWriteStream(coverPath);
+        let size = 0;
+
+        fileStream.on("data", (chunk: Buffer) => { size += chunk.length; });
+        fileStream.pipe(writeStream);
+        writeStream.on("finish", () => {
+          coverFile = { filename: coverFilename, path: coverPath, size };
+        });
+        writeStream.on("error", reject);
+      } else {
+        fileStream.resume(); // discard unknown files
+      }
+    });
+
+    bb.on("finish", () => resolve({ fields, audioFile, coverFile }));
+    bb.on("error", reject);
+
+    // Pipe request body into busboy
+    const body = req.body;
+    if (!body) return reject(new Error("No request body"));
+    Readable.fromWeb(body as import("stream/web").ReadableStream).pipe(bb);
+  });
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData();
+    const { fields, audioFile, coverFile } = await parseMultipart(req);
 
-    const audioFile = formData.get("audio") as File | null;
-    const coverFile = formData.get("cover") as File | null;
-    const title = formData.get("title") as string;
-    const description = formData.get("description") as string;
-    const showNotes = formData.get("showNotes") as string || "";
-    const episodeType = (formData.get("episodeType") as string) || "full";
-    const season = formData.get("season") ? Number(formData.get("season")) : undefined;
-    const episodeNumber = formData.get("episodeNumber") ? Number(formData.get("episodeNumber")) : undefined;
-    const status = (formData.get("status") as string) || "published";
-    const publishNow = formData.get("publishNow") === "true";
+    const title = fields.title?.trim();
+    const description = fields.description?.trim() || "";
+    const showNotes = fields.showNotes?.trim() || "";
+    const episodeType = fields.episodeType || "full";
+    const episodeNumber = fields.episodeNumber ? Number(fields.episodeNumber) : undefined;
+    const season = fields.season ? Number(fields.season) : undefined;
+    const publishNow = fields.publishNow === "true";
 
     if (!audioFile) {
       return NextResponse.json({ error: "Audio file is required" }, { status: 400 });
@@ -28,47 +105,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Title is required" }, { status: 400 });
     }
 
-    // Validate audio file type
-    const allowedAudio = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-m4a", "audio/ogg", "audio/aac"];
-    if (!allowedAudio.some(t => audioFile.type.includes(t.split("/")[1]))) {
-      return NextResponse.json({ error: "Invalid audio file type. Use MP3, WAV, M4A, or OGG." }, { status: 400 });
-    }
-
-    const id = uuidv4();
-    const audioExt = path.extname(audioFile.name) || ".mp3";
-    const audioFilename = `${id}${audioExt}`;
-
-    // Save audio file
-    const { size: fileSize } = await saveUploadedFile(audioFile, audioFilename, "audio");
-
-    // Get duration via ffprobe
-    const duration = await getAudioDuration(getAudioFilePath(audioFilename));
-
-    // Save cover image if provided
-    let coverFilename: string | undefined;
-    if (coverFile && coverFile.size > 0) {
-      const coverExt = path.extname(coverFile.name) || ".jpg";
-      coverFilename = `${id}-cover${coverExt}`;
-      await saveUploadedFile(coverFile, coverFilename, "cover");
-    }
+    const episodeId = audioFile.filename.replace(/\.[^.]+$/, "");
+    const duration = await getAudioDuration(audioFile.path);
 
     const baseUrl = process.env.PODCAST_BASE_URL || "http://localhost:3000";
-    const audioUrl = `${baseUrl}/api/audio/${audioFilename}`;
+    const audioUrl = `${baseUrl}/api/audio/${audioFile.filename}`;
 
     const episode = {
-      id,
+      id: episodeId,
       title,
       description,
       showNotes,
-      audioFile: audioFilename,
+      audioFile: audioFile.filename,
       audioUrl,
-      coverImage: coverFilename,
+      coverImage: coverFile?.filename,
       duration,
-      fileSize,
+      fileSize: audioFile.size,
       season,
       episodeNumber,
       episodeType: episodeType as "full" | "trailer" | "bonus",
-      status: (publishNow ? "published" : status) as "published" | "draft",
+      status: (publishNow ? "published" : "draft") as "published" | "draft",
       publishDate: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       distributions: { rss: publishNow, youtube: false as const },
