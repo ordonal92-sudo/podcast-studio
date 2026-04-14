@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+.env.local
+.env*.local
+uploads/
+data/episodes.json
+data/config.json
+.DS_Store
+Thumbs.db
+*.log

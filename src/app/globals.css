@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+:root {
+  --background: #07071A;
+  --foreground: #F8F8FF;
+  --primary: #8B5CF6;
+  --primary-light: #A78BFA;
+  --primary-dark: #6D28D9;
+  --accent: #EC4899;
+  --accent-light: #F472B6;
+  --gold: #F59E0B;
+  --surface: #0F0F2E;
+  --surface-2: #16163A;
+  --surface-3: #1E1E4A;
+  --border: rgba(139, 92, 246, 0.2);
+  --text-muted: #94A3B8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--primary-dark);
+  border-radius: 3px;
+}
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, #A78BFA 0%, #EC4899 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glass card */
+.glass {
+  background: rgba(15, 15, 46, 0.6);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+}
+
+/* Glow effect */
+.glow-purple {
+  box-shadow: 0 0 40px rgba(139, 92, 246, 0.3);
+}
+
+/* Animated gradient background */
+.hero-bg {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -20%, rgba(139, 92, 246, 0.25) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 40% at 80% 60%, rgba(236, 72, 153, 0.12) 0%, transparent 60%),
+    var(--background);
+}
+
+/* Section alternating bg */
+.section-bg-alt {
+  background: linear-gradient(180deg, var(--background) 0%, var(--surface) 50%, var(--background) 100%);
+}
