@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs";
 import Busboy from "busboy";
 import { Readable } from "stream";
+import ffmpeg from "fluent-ffmpeg";
 import { ensureUploadDirs, getAudioDuration } from "@/lib/storage";
 import { saveEpisode } from "@/lib/db";
 
@@ -15,8 +16,31 @@ export const dynamic = "force-dynamic";
 
 interface ParsedUpload {
   fields: Record<string, string>;
-  audioFile?: { filename: string; path: string; size: number; mimetype: string };
+  audioFile?: { filename: string; path: string; size: number; mimetype: string; isVideo?: boolean };
   coverFile?: { filename: string; path: string; size: number };
+}
+
+const ALLOWED_AUDIO = [
+  "audio/mpeg", "audio/mp3", "audio/mp4", "audio/x-m4a",
+  "audio/ogg", "audio/wav", "audio/aac", "audio/flac", "audio/x-flac",
+];
+const ALLOWED_VIDEO = [
+  "video/mp4", "video/quicktime", "video/x-msvideo", "video/webm",
+  "video/mpeg", "video/x-matroska",
+];
+const ALLOWED_IMAGE = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+
+function extractAudioFromVideo(videoPath: string, audioPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ffmpeg(videoPath)
+      .noVideo()
+      .audioCodec("libmp3lame")
+      .audioBitrate("192k")
+      .output(audioPath)
+      .on("end", () => resolve())
+      .on("error", (err) => reject(new Error(`שגיאה בחילוץ שמע: ${err.message}`)))
+      .run();
+  });
 }
 
 function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
@@ -42,19 +66,20 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
       fields[name] = value;
     });
 
-    const ALLOWED_AUDIO = ["audio/mpeg", "audio/mp3", "audio/mp4", "audio/x-m4a", "audio/ogg", "audio/wav", "audio/aac", "audio/flac", "audio/x-flac"];
-    const ALLOWED_IMAGE = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-
     bb.on("file", (fieldname, fileStream, info) => {
       const { filename, mimeType } = info;
-      const ext = path.extname(filename) || (mimeType.includes("mpeg") ? ".mp3" : ".mp3");
 
       if (fieldname === "audio") {
-        if (!ALLOWED_AUDIO.some(t => mimeType.startsWith(t.split("/")[0]) && mimeType.includes("audio")) && !ALLOWED_AUDIO.includes(mimeType)) {
+        const isAudio = ALLOWED_AUDIO.includes(mimeType);
+        const isVideo = ALLOWED_VIDEO.includes(mimeType);
+
+        if (!isAudio && !isVideo) {
           fileStream.resume();
-          return reject(new Error(`סוג קובץ לא מותר: ${mimeType}. רק קבצי אודיו מותרים.`));
+          return reject(new Error(`סוג קובץ לא נתמך: ${mimeType}. ניתן להעלות קבצי אודיו או וידאו.`));
         }
-        const destFilename = `${id}${ext}`;
+
+        const origExt = path.extname(filename) || (isVideo ? ".mp4" : ".mp3");
+        const destFilename = `${id}${origExt}`;
         const destPath = path.join(process.cwd(), "uploads", destFilename);
         const writeStream = fs.createWriteStream(destPath);
         let size = 0;
@@ -62,9 +87,10 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
         fileStream.on("data", (chunk: Buffer) => { size += chunk.length; });
         fileStream.pipe(writeStream);
         writeStream.on("finish", () => {
-          audioFile = { filename: destFilename, path: destPath, size, mimetype: mimeType };
+          audioFile = { filename: destFilename, path: destPath, size, mimetype: mimeType, isVideo };
         });
         writeStream.on("error", reject);
+
       } else if (fieldname === "cover") {
         if (!ALLOWED_IMAGE.includes(mimeType)) {
           fileStream.resume();
@@ -90,7 +116,6 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
     bb.on("finish", () => resolve({ fields, audioFile, coverFile }));
     bb.on("error", reject);
 
-    // Pipe request body into busboy
     const body = req.body;
     if (!body) return reject(new Error("No request body"));
     Readable.fromWeb(body as import("stream/web").ReadableStream).pipe(bb);
@@ -110,24 +135,38 @@ export async function POST(req: NextRequest) {
     const publishNow = fields.publishNow === "true";
 
     if (!audioFile) {
-      return NextResponse.json({ error: "Audio file is required" }, { status: 400 });
+      return NextResponse.json({ error: "נדרש קובץ אודיו או וידאו" }, { status: 400 });
     }
     if (!title) {
-      return NextResponse.json({ error: "Title is required" }, { status: 400 });
+      return NextResponse.json({ error: "נדרש שם פרק" }, { status: 400 });
     }
 
-    const episodeId = audioFile.filename.replace(/\.[^.]+$/, "");
-    const duration = await getAudioDuration(audioFile.path);
+    let finalAudioFilename = audioFile.filename;
+    let finalAudioPath = audioFile.path;
+
+    // If video — extract audio to mp3
+    if (audioFile.isVideo) {
+      const mp3Filename = `${path.basename(audioFile.filename, path.extname(audioFile.filename))}.mp3`;
+      const mp3Path = path.join(process.cwd(), "uploads", mp3Filename);
+      await extractAudioFromVideo(audioFile.path, mp3Path);
+      // Remove original video file to save space
+      fs.unlinkSync(audioFile.path);
+      finalAudioFilename = mp3Filename;
+      finalAudioPath = mp3Path;
+    }
+
+    const episodeId = finalAudioFilename.replace(/\.[^.]+$/, "");
+    const duration = await getAudioDuration(finalAudioPath);
 
     const baseUrl = process.env.PODCAST_BASE_URL || "http://localhost:3000";
-    const audioUrl = `${baseUrl}/api/audio/${audioFile.filename}`;
+    const audioUrl = `${baseUrl}/api/audio/${finalAudioFilename}`;
 
     const episode = {
       id: episodeId,
       title,
       description,
       showNotes,
-      audioFile: audioFile.filename,
+      audioFile: finalAudioFilename,
       audioUrl,
       coverImage: coverFile?.filename,
       duration,
