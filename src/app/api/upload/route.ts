@@ -4,7 +4,7 @@ import path from "path";
 import fs from "fs";
 import Busboy from "busboy";
 import { Readable } from "stream";
-import { ensureUploadDirs, getAudioFilePath, getAudioDuration } from "@/lib/storage";
+import { ensureUploadDirs, getAudioDuration } from "@/lib/storage";
 import { saveEpisode } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -42,11 +42,18 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
       fields[name] = value;
     });
 
+    const ALLOWED_AUDIO = ["audio/mpeg", "audio/mp3", "audio/mp4", "audio/x-m4a", "audio/ogg", "audio/wav", "audio/aac", "audio/flac", "audio/x-flac"];
+    const ALLOWED_IMAGE = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+
     bb.on("file", (fieldname, fileStream, info) => {
       const { filename, mimeType } = info;
       const ext = path.extname(filename) || (mimeType.includes("mpeg") ? ".mp3" : ".mp3");
 
       if (fieldname === "audio") {
+        if (!ALLOWED_AUDIO.some(t => mimeType.startsWith(t.split("/")[0]) && mimeType.includes("audio")) && !ALLOWED_AUDIO.includes(mimeType)) {
+          fileStream.resume();
+          return reject(new Error(`סוג קובץ לא מותר: ${mimeType}. רק קבצי אודיו מותרים.`));
+        }
         const destFilename = `${id}${ext}`;
         const destPath = path.join(process.cwd(), "uploads", destFilename);
         const writeStream = fs.createWriteStream(destPath);
@@ -59,6 +66,10 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
         });
         writeStream.on("error", reject);
       } else if (fieldname === "cover") {
+        if (!ALLOWED_IMAGE.includes(mimeType)) {
+          fileStream.resume();
+          return reject(new Error(`סוג קובץ לא מותר: ${mimeType}. רק תמונות JPG/PNG/WEBP מותרות.`));
+        }
         const coverExt = path.extname(filename) || ".jpg";
         const coverFilename = `${id}-cover${coverExt}`;
         const coverPath = path.join(process.cwd(), "uploads", "covers", coverFilename);
