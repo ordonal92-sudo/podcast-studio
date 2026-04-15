@@ -5,7 +5,3 @@ builder = "nixpacks"
 startCommand = "npm start"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
-
-[[deploy.envVars]]
-name = "PORT"
-value = "3000"
