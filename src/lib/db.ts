@@ -1,8 +1,10 @@
 import fs from "fs";
 import path from "path";
 
-const DB_PATH = path.join(process.cwd(), "data", "episodes.json");
-const CONFIG_PATH = path.join(process.cwd(), "data", "config.json");
+// Store data inside uploads dir so it persists on the same Railway volume
+const DATA_DIR = path.join(process.cwd(), "uploads", ".data");
+const DB_PATH = path.join(DATA_DIR, "episodes.json");
+const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 
 export interface Episode {
   id: string;
