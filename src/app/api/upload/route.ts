@@ -10,8 +10,6 @@ import { saveEpisode } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-// Disable Next.js body parsing — we handle it ourselves via busboy (streaming)
 export const dynamic = "force-dynamic";
 
 interface ParsedUpload {
@@ -57,9 +55,20 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
     let coverFile: ParsedUpload["coverFile"];
     const id = uuidv4();
 
+    // Track pending write streams to avoid race condition
+    const pendingWrites: Promise<void>[] = [];
+    let busboyDone = false;
+
+    const maybeResolve = () => {
+      if (!busboyDone) return;
+      Promise.all(pendingWrites)
+        .then(() => resolve({ fields, audioFile, coverFile }))
+        .catch(reject);
+    };
+
     const bb = Busboy({
       headers: { "content-type": contentType },
-      limits: { fileSize: 600 * 1024 * 1024 }, // 600MB max
+      limits: { fileSize: 600 * 1024 * 1024 },
     });
 
     bb.on("field", (name, value) => {
@@ -75,7 +84,7 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
 
         if (!isAudio && !isVideo) {
           fileStream.resume();
-          return reject(new Error(`סוג קובץ לא נתמך: ${mimeType}. ניתן להעלות קבצי אודיו או וידאו.`));
+          return reject(new Error(`סוג קובץ לא נתמך: ${mimeType}. ניתן להעלות קבצי MP3, MP4, WAV, M4A או וידאו.`));
         }
 
         const origExt = path.extname(filename) || (isVideo ? ".mp4" : ".mp3");
@@ -86,15 +95,20 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
 
         fileStream.on("data", (chunk: Buffer) => { size += chunk.length; });
         fileStream.pipe(writeStream);
-        writeStream.on("finish", () => {
-          audioFile = { filename: destFilename, path: destPath, size, mimetype: mimeType, isVideo };
+
+        const writePromise = new Promise<void>((res, rej) => {
+          writeStream.on("finish", () => {
+            audioFile = { filename: destFilename, path: destPath, size, mimetype: mimeType, isVideo };
+            res();
+          });
+          writeStream.on("error", rej);
         });
-        writeStream.on("error", reject);
+        pendingWrites.push(writePromise);
 
       } else if (fieldname === "cover") {
         if (!ALLOWED_IMAGE.includes(mimeType)) {
           fileStream.resume();
-          return reject(new Error(`סוג קובץ לא מותר: ${mimeType}. רק תמונות JPG/PNG/WEBP מותרות.`));
+          return;
         }
         const coverExt = path.extname(filename) || ".jpg";
         const coverFilename = `${id}-cover${coverExt}`;
@@ -104,16 +118,25 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
 
         fileStream.on("data", (chunk: Buffer) => { size += chunk.length; });
         fileStream.pipe(writeStream);
-        writeStream.on("finish", () => {
-          coverFile = { filename: coverFilename, path: coverPath, size };
+
+        const writePromise = new Promise<void>((res, rej) => {
+          writeStream.on("finish", () => {
+            coverFile = { filename: coverFilename, path: coverPath, size };
+            res();
+          });
+          writeStream.on("error", rej);
         });
-        writeStream.on("error", reject);
+        pendingWrites.push(writePromise);
+
       } else {
-        fileStream.resume(); // discard unknown files
+        fileStream.resume();
       }
     });
 
-    bb.on("finish", () => resolve({ fields, audioFile, coverFile }));
+    bb.on("finish", () => {
+      busboyDone = true;
+      maybeResolve();
+    });
     bb.on("error", reject);
 
     const body = req.body;
@@ -135,7 +158,10 @@ export async function POST(req: NextRequest) {
     const publishNow = fields.publishNow === "true";
 
     if (!audioFile) {
-      return NextResponse.json({ error: "נדרש קובץ אודיו או וידאו" }, { status: 400 });
+      return NextResponse.json({
+        error: "לא התקבל קובץ אודיו. ודאי שבחרת קובץ MP3, MP4, WAV או M4A.",
+        debug: { fields: Object.keys(fields) }
+      }, { status: 400 });
     }
     if (!title) {
       return NextResponse.json({ error: "נדרש שם פרק" }, { status: 400 });
@@ -149,8 +175,7 @@ export async function POST(req: NextRequest) {
       const mp3Filename = `${path.basename(audioFile.filename, path.extname(audioFile.filename))}.mp3`;
       const mp3Path = path.join(process.cwd(), "uploads", mp3Filename);
       await extractAudioFromVideo(audioFile.path, mp3Path);
-      // Remove original video file to save space
-      fs.unlinkSync(audioFile.path);
+      try { fs.unlinkSync(audioFile.path); } catch { /* ignore */ }
       finalAudioFilename = mp3Filename;
       finalAudioPath = mp3Path;
     }
@@ -184,7 +209,11 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, episode }, { status: 201 });
   } catch (err) {
-    console.error("Upload error:", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("Upload error:", message);
+    return NextResponse.json({
+      error: message,
+      hint: "בדוק שהקובץ תקין ושם הפרק מולא"
+    }, { status: 500 });
   }
 }

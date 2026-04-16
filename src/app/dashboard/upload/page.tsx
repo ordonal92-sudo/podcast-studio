@@ -117,13 +117,14 @@ export default function UploadPage() {
         xhr.onload = () => {
           try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("Invalid server response")); }
         };
-        xhr.onerror = () => reject(new Error("Upload failed"));
+        xhr.onerror = () => reject(new Error("שגיאת רשת — ודאי שיש חיבור לאינטרנט"));
+        xhr.ontimeout = () => reject(new Error("ההעלאה ארכה יותר מדי זמן"));
         xhr.open("POST", "/api/upload");
         xhr.send(fd);
       });
 
       if (!uploadResult.ok || !uploadResult.episode) {
-        throw new Error(uploadResult.error || "Upload failed");
+        throw new Error(uploadResult.error || "שגיאה לא ידועה בשרת");
       }
 
       setUploadProgress(85);
@@ -273,8 +274,8 @@ export default function UploadPage() {
             <ChevronLeft size={20} />
           </Link>
           <div>
-            <h1 className="text-2xl font-bold text-white">Upload New Episode</h1>
-            <p className="text-sm text-slate-400">Publish once — distribute everywhere automatically</p>
+            <h1 className="text-2xl font-bold text-white">העלאת פרק חדש</h1>
+            <p className="text-sm text-slate-400">פרסמי פעם אחת — הפצה אוטומטית לכל מקום</p>
           </div>
         </div>
 
@@ -283,7 +284,7 @@ export default function UploadPage() {
           <div className="glass rounded-2xl p-6">
             <label className="block text-sm font-semibold text-white mb-4">
               <Mic2 size={15} className="inline mr-2 text-purple-400" />
-              Audio File *
+              קובץ אודיו *
             </label>
             <input ref={audioInputRef} type="file" accept="audio/*" onChange={handleAudioChange} className="hidden" />
             {audioFile ? (
@@ -307,8 +308,8 @@ export default function UploadPage() {
                 className="w-full py-10 rounded-xl border-2 border-dashed flex flex-col items-center gap-2 transition-all hover:border-purple-500 hover:bg-purple-500/5"
                 style={{ borderColor: "rgba(139,92,246,0.3)" }}>
                 <Upload size={28} className="text-purple-400" />
-                <span className="text-white font-medium">Click to choose audio file</span>
-                <span className="text-xs text-slate-400">MP3, WAV, M4A, OGG — up to 500MB</span>
+                <span className="text-white font-medium">לחצי לבחירת קובץ אודיו</span>
+                <span className="text-xs text-slate-400">MP3, WAV, M4A, OGG — עד 500MB</span>
               </button>
             )}
           </div>
@@ -488,7 +489,7 @@ export default function UploadPage() {
               style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
               <AlertCircle size={18} className="text-red-400 shrink-0 mt-0.5" />
               <div>
-                <div className="text-sm font-medium text-red-400">Upload failed</div>
+                <div className="text-sm font-medium text-red-400">ההעלאה נכשלה</div>
                 <div className="text-xs text-slate-400 mt-1">{errorMsg}</div>
               </div>
             </div>

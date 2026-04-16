@@ -23,12 +23,12 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Login failed");
+        setError(data.error || "כניסה נכשלה");
       } else {
         router.push("/dashboard");
       }
     } catch {
-      setError("Connection error");
+      setError("שגיאת חיבור");
     } finally {
       setLoading(false);
     }
@@ -45,7 +45,7 @@ export default function LoginPage() {
             <Mic2 size={24} className="text-white" />
           </div>
           <h1 className="text-2xl font-bold text-white">PodWave Studio</h1>
-          <p className="text-slate-400 text-sm mt-1">Sign in to manage your podcast</p>
+          <p className="text-slate-400 text-sm mt-1">כניסה לניהול הפודקאסט שלך</p>
         </div>
 
         <div className="glass rounded-2xl p-8">
@@ -53,14 +53,14 @@ export default function LoginPage() {
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-2">
                 <Lock size={13} className="inline mr-1.5 text-purple-400" />
-                Password
+                סיסמה
               </label>
               <div className="relative">
                 <input
                   type={showPw ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your admin password"
+                  placeholder="הכניסי את סיסמת המנהל"
                   required
                   className="w-full px-4 py-3 pr-11 rounded-xl text-white text-sm outline-none transition-all"
                   style={{
@@ -88,13 +88,13 @@ export default function LoginPage() {
             <button type="submit" disabled={loading || !password}
               className="w-full py-3 rounded-xl text-sm font-bold text-white transition-all hover:scale-105 disabled:opacity-50 disabled:scale-100"
               style={{ background: "linear-gradient(135deg, #8B5CF6, #EC4899)", boxShadow: "0 4px 20px rgba(139,92,246,0.3)" }}>
-              {loading ? "Signing in..." : "Sign In"}
+              {loading ? "נכנסת..." : "כניסה"}
             </button>
           </form>
         </div>
 
         <p className="text-center text-xs text-slate-600 mt-6">
-          Password is set in your <code className="text-slate-400">.env.local</code> file
+          PodWave Studio · גרסת הפקה
         </p>
       </div>
     </div>
