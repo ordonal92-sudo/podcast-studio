@@ -8,6 +8,8 @@ const PUBLIC_PATHS = [
   "/login",
   "/api/auth/login",
   "/api/feed",
+  "/api/audio",
+  "/api/covers",
 ];
 
 export async function middleware(req: NextRequest) {
