@@ -7,7 +7,6 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "600mb",
     },
   },
-  middlewareClientMaxBodySize: false,
   // Allow serving uploaded covers from /api/covers
   async headers() {
     return [

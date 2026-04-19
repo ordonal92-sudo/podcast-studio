@@ -7,6 +7,7 @@ import { Readable } from "stream";
 import ffmpeg from "fluent-ffmpeg";
 import { ensureUploadDirs, getAudioDuration } from "@/lib/storage";
 import { saveEpisode } from "@/lib/db";
+import { isAuthenticated } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -146,6 +147,10 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
 }
 
 export async function POST(req: NextRequest) {
+  // Auth check inside route (middleware excluded for large uploads)
+  if (!(await isAuthenticated(req))) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   try {
     const { fields, audioFile, coverFile } = await parseMultipart(req);
 
