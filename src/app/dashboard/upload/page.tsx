@@ -117,6 +117,7 @@ export default function UploadPage() {
         xhr.onload = () => {
           try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("Invalid server response")); }
         };
+        xhr.timeout = 0; // no browser-side timeout — let Railway handle it
         xhr.onerror = () => reject(new Error("שגיאת רשת — ודאי שיש חיבור לאינטרנט"));
         xhr.ontimeout = () => reject(new Error("ההעלאה ארכה יותר מדי זמן"));
         xhr.open("POST", "/api/upload");
@@ -286,7 +287,7 @@ export default function UploadPage() {
               <Mic2 size={15} className="inline mr-2 text-purple-400" />
               קובץ אודיו *
             </label>
-            <input ref={audioInputRef} type="file" accept="audio/*" onChange={handleAudioChange} className="hidden" />
+            <input ref={audioInputRef} type="file" accept="audio/*,video/*" onChange={handleAudioChange} className="hidden" />
             {audioFile ? (
               <div className="flex items-center gap-4 p-4 rounded-xl"
                 style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)" }}>
@@ -309,7 +310,7 @@ export default function UploadPage() {
                 style={{ borderColor: "rgba(139,92,246,0.3)" }}>
                 <Upload size={28} className="text-purple-400" />
                 <span className="text-white font-medium">לחצי לבחירת קובץ אודיו</span>
-                <span className="text-xs text-slate-400">MP3, WAV, M4A, OGG — עד 500MB</span>
+                <span className="text-xs text-slate-400">MP3, WAV, M4A, OGG, MP4, MOV — עד 500MB</span>
               </button>
             )}
           </div>
@@ -337,7 +338,6 @@ export default function UploadPage() {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Short episode description (shown in podcast apps)"
-                required
                 rows={3}
                 className="w-full px-4 py-2.5 rounded-xl text-white text-sm outline-none resize-none"
                 style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(139,92,246,0.2)" }}
