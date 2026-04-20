@@ -115,10 +115,14 @@ export default function UploadPage() {
           }
         };
         xhr.onload = () => {
-          try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("Invalid server response")); }
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            reject(new Error(`שגיאת שרת (HTTP ${xhr.status}) — תגובה לא תקינה`));
+          }
         };
-        xhr.timeout = 0; // no browser-side timeout — let Railway handle it
-        xhr.onerror = () => reject(new Error("שגיאת רשת — ודאי שיש חיבור לאינטרנט"));
+        xhr.timeout = 0;
+        xhr.onerror = () => reject(new Error(`שגיאת רשת (HTTP ${xhr.status || "0"}) — ודאי שיש חיבור לאינטרנט`));
         xhr.ontimeout = () => reject(new Error("ההעלאה ארכה יותר מדי זמן"));
         xhr.open("POST", "/api/upload");
         xhr.send(fd);
