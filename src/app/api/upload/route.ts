@@ -3,7 +3,6 @@ import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import fs from "fs";
 import Busboy from "busboy";
-import { Readable } from "stream";
 import ffmpeg from "fluent-ffmpeg";
 import { ensureUploadDirs, getAudioDuration } from "@/lib/storage";
 import { saveEpisode } from "@/lib/db";
@@ -28,6 +27,15 @@ const ALLOWED_VIDEO = [
   "video/mpeg", "video/x-matroska",
 ];
 const ALLOWED_IMAGE = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`TIMEOUT[${label}] after ${ms / 1000}s`)), ms)
+    ),
+  ]);
+}
 
 function extractAudioFromVideo(videoPath: string, audioPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -56,15 +64,20 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
     let coverFile: ParsedUpload["coverFile"];
     const id = uuidv4();
 
-    // Track pending write streams to avoid race condition
     const pendingWrites: Promise<void>[] = [];
     let busboyDone = false;
+    let settled = false;
+
+    const done = (err?: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err instanceof Error ? err : new Error(String(err)));
+      else resolve({ fields, audioFile, coverFile });
+    };
 
     const maybeResolve = () => {
       if (!busboyDone) return;
-      Promise.all(pendingWrites)
-        .then(() => resolve({ fields, audioFile, coverFile }))
-        .catch(reject);
+      Promise.all(pendingWrites).then(() => done()).catch(done);
     };
 
     const bb = Busboy({
@@ -72,9 +85,7 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
       limits: { fileSize: 600 * 1024 * 1024 },
     });
 
-    bb.on("field", (name, value) => {
-      fields[name] = value;
-    });
+    bb.on("field", (name, value) => { fields[name] = value; });
 
     bb.on("file", (fieldname, fileStream, info) => {
       const { filename, mimeType } = info;
@@ -85,7 +96,7 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
 
         if (!isAudio && !isVideo) {
           fileStream.resume();
-          return reject(new Error(`סוג קובץ לא נתמך: ${mimeType}. ניתן להעלות קבצי MP3, MP4, WAV, M4A או וידאו.`));
+          return done(new Error(`סוג קובץ לא נתמך: ${mimeType}. ניתן להעלות קבצי MP3, MP4, WAV, M4A או וידאו.`));
         }
 
         const origExt = path.extname(filename) || (isVideo ? ".mp4" : ".mp3");
@@ -134,25 +145,45 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
       }
     });
 
-    bb.on("finish", () => {
-      busboyDone = true;
-      maybeResolve();
-    });
-    bb.on("error", reject);
+    bb.on("finish", () => { busboyDone = true; maybeResolve(); });
+    bb.on("error", done);
 
+    // FIX: explicitly read the Web ReadableStream and call bb.end() when done.
+    // Readable.fromWeb() does not reliably signal EOF in Railway's proxy environment —
+    // the underlying IncomingMessage 'end' event doesn't always propagate through the
+    // Web ReadableStream wrapper, so Busboy never fires 'finish'.
+    // Explicit reading guarantees bb.end() is called.
     const body = req.body;
-    if (!body) return reject(new Error("No request body"));
-    Readable.fromWeb(body as import("stream/web").ReadableStream).pipe(bb);
+    if (!body) return done(new Error("No request body"));
+
+    (async () => {
+      const reader = (body as ReadableStream<Uint8Array>).getReader();
+      try {
+        while (true) {
+          const { done: streamDone, value } = await reader.read();
+          if (streamDone) break;
+          if (value) bb.write(Buffer.from(value));
+        }
+        bb.end();
+      } catch (e) {
+        done(e);
+      } finally {
+        reader.releaseLock();
+      }
+    })();
   });
 }
 
 export async function POST(req: NextRequest) {
-  // Auth check inside route (middleware excluded for large uploads)
   if (!(await isAuthenticated(req))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
-    const { fields, audioFile, coverFile } = await parseMultipart(req);
+    const { fields, audioFile, coverFile } = await withTimeout(
+      parseMultipart(req),
+      240_000,
+      "parseMultipart"
+    );
 
     const title = fields.title?.trim();
     const description = fields.description?.trim() || "";
@@ -175,7 +206,6 @@ export async function POST(req: NextRequest) {
     let finalAudioFilename = audioFile.filename;
     let finalAudioPath = audioFile.path;
 
-    // If video — extract audio to mp3
     if (audioFile.isVideo) {
       const mp3Filename = `${path.basename(audioFile.filename, path.extname(audioFile.filename))}.mp3`;
       const mp3Path = path.join(process.cwd(), "uploads", mp3Filename);
@@ -186,7 +216,7 @@ export async function POST(req: NextRequest) {
     }
 
     const episodeId = finalAudioFilename.replace(/\.[^.]+$/, "");
-    const duration = await getAudioDuration(finalAudioPath);
+    const duration = await withTimeout(getAudioDuration(finalAudioPath), 30_000, "ffprobe");
 
     const baseUrl = process.env.PODCAST_BASE_URL || "http://localhost:3000";
     const audioUrl = `${baseUrl}/api/audio/${finalAudioFilename}`;
@@ -211,7 +241,6 @@ export async function POST(req: NextRequest) {
     };
 
     saveEpisode(episode);
-
     return NextResponse.json({ ok: true, episode }, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
