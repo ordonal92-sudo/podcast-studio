@@ -148,21 +148,28 @@ function parseMultipart(req: NextRequest): Promise<ParsedUpload> {
     bb.on("finish", () => { busboyDone = true; maybeResolve(); });
     bb.on("error", done);
 
-    // FIX: explicitly read the Web ReadableStream and call bb.end() when done.
-    // Readable.fromWeb() does not reliably signal EOF in Railway's proxy environment —
-    // the underlying IncomingMessage 'end' event doesn't always propagate through the
-    // Web ReadableStream wrapper, so Busboy never fires 'finish'.
-    // Explicit reading guarantees bb.end() is called.
+    // FIX: Railway's proxy + Next.js never closes the Web ReadableStream EOF,
+    // so both Readable.fromWeb().pipe() and reader.read() hang forever
+    // waiting for done:true that never arrives.
+    // Workaround: use Content-Length header to know when all bytes arrived,
+    // then call bb.end() explicitly.
     const body = req.body;
     if (!body) return done(new Error("No request body"));
 
+    const contentLength = parseInt(req.headers.get("content-length") || "0", 10);
+    if (!contentLength) return done(new Error("Missing Content-Length header"));
+
     (async () => {
       const reader = (body as ReadableStream<Uint8Array>).getReader();
+      let totalRead = 0;
       try {
-        while (true) {
+        while (totalRead < contentLength) {
           const { done: streamDone, value } = await reader.read();
           if (streamDone) break;
-          if (value) bb.write(Buffer.from(value));
+          if (value) {
+            bb.write(Buffer.from(value));
+            totalRead += value.length;
+          }
         }
         bb.end();
       } catch (e) {
