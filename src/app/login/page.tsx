@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Mic2, Lock, Eye, EyeOff } from "lucide-react";
 
@@ -9,7 +9,10 @@ export default function LoginPage() {
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const router = useRouter();
+
+  useEffect(() => { setMounted(true); }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -85,7 +88,7 @@ export default function LoginPage() {
               </div>
             )}
 
-            <button type="submit" disabled={loading || !password}
+            <button type="submit" disabled={loading || (mounted && !password)}
               className="w-full py-3 rounded-xl text-sm font-bold text-white transition-all hover:scale-105 disabled:opacity-50 disabled:scale-100"
               style={{ background: "linear-gradient(135deg, #8B5CF6, #EC4899)", boxShadow: "0 4px 20px rgba(139,92,246,0.3)" }}>
               {loading ? "נכנסת..." : "כניסה"}
