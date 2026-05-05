@@ -185,12 +185,19 @@ export async function POST(req: NextRequest) {
   if (!(await isAuthenticated(req))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  let audioPathForCleanup: string | undefined;
+  let coverPathForCleanup: string | undefined;
+
   try {
     const { fields, audioFile, coverFile } = await withTimeout(
       parseMultipart(req),
       240_000,
       "parseMultipart"
     );
+
+    audioPathForCleanup = audioFile?.path;
+    coverPathForCleanup = coverFile?.path;
 
     const title = fields.title?.trim();
     const description = fields.description?.trim() || "";
@@ -220,6 +227,7 @@ export async function POST(req: NextRequest) {
       try { fs.unlinkSync(audioFile.path); } catch { /* ignore */ }
       finalAudioFilename = mp3Filename;
       finalAudioPath = mp3Path;
+      audioPathForCleanup = mp3Path;
     }
 
     const episodeId = finalAudioFilename.replace(/\.[^.]+$/, "");
@@ -252,9 +260,21 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("Upload error:", message);
+
+    // Clean up orphaned files so failed uploads don't fill the disk
+    if (audioPathForCleanup) {
+      try { fs.unlinkSync(audioPathForCleanup); } catch { /* file may not exist */ }
+    }
+    if (coverPathForCleanup) {
+      try { fs.unlinkSync(coverPathForCleanup); } catch { /* file may not exist */ }
+    }
+
+    const isDiskFull = message.includes("ENOSPC") || message.includes("no space left");
     return NextResponse.json({
-      error: message,
-      hint: "בדוק שהקובץ תקין ושם הפרק מולא"
+      error: isDiskFull
+        ? "אין מקום פנוי בשרת. צרי קשר עם התמיכה לשדרוג נפח האחסון."
+        : message,
+      hint: isDiskFull ? undefined : "בדוק שהקובץ תקין ושם הפרק מולא"
     }, { status: 500 });
   }
 }
